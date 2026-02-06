@@ -280,8 +280,21 @@ if [ -d "templates" ]; then
     cp templates/connect.bat "$TEMPLATE_DIR/connect.bat"
 else
     log_info "Downloading templates from GitHub..."
-    curl -sL "$BASE_REPO_URL/connect.sh" -o "$TEMPLATE_DIR/connect.sh"
+    
+    # Download connect.sh with validation
+    HTTP_CODE=$(curl -sL -w "%{http_code}" "$BASE_REPO_URL/connect.sh" -o "$TEMPLATE_DIR/connect.sh")
+    if [ "$HTTP_CODE" != "200" ]; then
+        log_warn "Failed to download connect.sh (HTTP $HTTP_CODE). Trying fallback or skipping..."
+    fi
+
+    # Download connect.bat with validation
     curl -sL "$BASE_REPO_URL/connect.bat" -o "$TEMPLATE_DIR/connect.bat"
+    
+    # Check for soft 404 (github raw sometimes returns text "404: Not Found" with 404 status, but we checked status above)
+    if grep -q "404: Not Found" "$TEMPLATE_DIR/connect.sh"; then
+        log_error "Template connect.sh downloaded as 404 error. Check repository visibility!"
+        rm "$TEMPLATE_DIR/connect.sh"
+    fi
 fi
 
 # Function to generate client scripts from templates
@@ -295,15 +308,17 @@ generate_client_scripts() {
 
     log_info "Generating client scripts for Version: $VER"
 
-    if [ -f "$SRC_DIR/connect.sh" ]; then
+    if [ -f "$SRC_DIR/connect.sh" ] && [ -s "$SRC_DIR/connect.sh" ]; then
         sed -e "s|{{SERVER_IP}}|$IP|g" \
             -e "s|{{PAQET_PORT}}|$PORT|g" \
             -e "s|{{SECRET_KEY}}|$SECRET|g" \
             -e "s|{{PAQET_VERSION}}|$VER|g" \
             "$SRC_DIR/connect.sh" > "$TARGET_DIR/connect.sh"
         chmod +x "$TARGET_DIR/connect.sh"
+        chmod 644 "$TARGET_DIR/connect.sh" # Ensure readable by web server
+        log_info "Generated: $TARGET_DIR/connect.sh"
     else
-        log_error "Template connect.sh not found!"
+        log_error "Template connect.sh not found or empty! Client script NOT generated."
     fi
 
      if [ -f "$SRC_DIR/connect.bat" ]; then
@@ -312,8 +327,10 @@ generate_client_scripts() {
             -e "s|{{SECRET_KEY}}|$SECRET|g" \
             -e "s|{{PAQET_VERSION}}|$VER|g" \
             "$SRC_DIR/connect.bat" > "$TARGET_DIR/connect.bat"
+        chmod 644 "$TARGET_DIR/connect.bat" # Ensure readable by web server
+        log_info "Generated: $TARGET_DIR/connect.bat"
     else
-        log_error "Template connect.bat not found!"
+        log_warn "Template connect.bat not found!"
     fi
 }
 
