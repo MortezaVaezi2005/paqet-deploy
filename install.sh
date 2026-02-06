@@ -97,14 +97,43 @@ log_info "Detected Interface: $INTERFACE"
 log_info "Detected Gateway IP: $GATEWAY_IP"
 
 # Gateway MAC
+# Gateway MAC
+log_info "Detecting Gateway MAC..."
 # Try to ping gateway first to populate ARP table
-ping -c 1 -W 1 "$GATEWAY_IP" > /dev/null 2>&1 || true
-GATEWAY_MAC=$(ip neigh show "$GATEWAY_IP" dev "$INTERFACE" | awk '{print $5}')
+ping -c 3 -W 1 "$GATEWAY_IP" > /dev/null 2>&1 || true
 
-if [ -z "$GATEWAY_MAC" ]; then
-    log_error "Could not detect Gateway MAC address."
-    exit 1
+# Method 1: ip neigh (Look specifically for lladdr tag)
+GATEWAY_MAC=$(ip neigh show "$GATEWAY_IP" dev "$INTERFACE" | awk '/lladdr/ { for(i=1;i<=NF;i++) if($i=="lladdr") print $(i+1) }')
+
+# Method 2: arp command (fallback)
+if [[ -z "$GATEWAY_MAC" ]]; then
+    if command -v arp >/dev/null; then
+        GATEWAY_MAC=$(arp -an | grep "($GATEWAY_IP)" | grep -o -E '([[:xdigit:]]{1,2}:){5}[[:xdigit:]]{1,2}' | head -n 1)
+    fi
 fi
+
+# Method 3: /proc/net/arp (fallback)
+if [[ -z "$GATEWAY_MAC" ]]; then
+    GATEWAY_MAC=$(awk -v ip="$GATEWAY_IP" '$1==ip {print $4}' /proc/net/arp)
+fi
+
+# Validation
+if [[ -z "$GATEWAY_MAC" ]] || [[ "$GATEWAY_MAC" == "00:00:00:00:00:00" ]]; then
+    log_error "Could not detect Gateway MAC address."
+    log_warn "Possible reasons:"
+    log_warn "1. Gateway is not reachable (check network)."
+    log_warn "2. Gateway ignores ping (ICMP blocked)."
+    log_warn "3. Environment does not support ARP (e.g., some VPS types)."
+    
+    # Allow manual entry as last resort
+    read -p "Enter Gateway MAC manually (or press Enter to exit): " MANUAL_MAC
+    if [[ -n "$MANUAL_MAC" ]]; then
+        GATEWAY_MAC="$MANUAL_MAC"
+    else
+        exit 1
+    fi
+fi
+
 log_info "Detected Gateway MAC: $GATEWAY_MAC"
 
 # 4. Fetch Latest Version
